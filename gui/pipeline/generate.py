@@ -219,12 +219,12 @@ def run_generate_job(
     datamosh_probability = float(gen.get("datamoshProbability", 0.0))
     datamosh_window = float(gen.get("datamoshWindow", 0.5))
     concat_list = list(cuts)
+    mosh_count = 0
 
     if datamosh_probability > 0 and len(cuts) > 1:
         mosh_folder = edits_folder / "clips_datamosh"
         ffmpeg_utils.ensure_dir(mosh_folder)
         concat_list = [cuts[0]]
-        mosh_count = 0
         for i in range(len(cuts) - 1):
             if cancel_event.is_set():
                 raise ffmpeg_utils.CancelledError()
@@ -257,11 +257,23 @@ def run_generate_job(
     final_output = ffmpeg_utils.unique_path(edits_folder / output_filename)
     if final_output.name != output_filename:
         on_log(f"[INFO] Le fichier existait déjà, sortie renommée : {final_output.name}")
-    ffmpeg_utils.run(
-        [ffmpeg_path, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file), "-c", "copy", str(final_output)],
-        on_log,
-        cancel_event,
-    )
+    if mosh_count:
+        # The datamosh transition clips are produced by a different ffmpeg filter chain than
+        # the plain cuts, so even at matching codec/crf their encoded SPS/PPS parameter sets
+        # differ slightly. A stream-copy concat (fine for uniform hard-cut clips) then plays
+        # back with a black flash at every segment boundary in real players like VLC — their
+        # decoder resets on each parameter-set change, even though ffmpeg/ffprobe decode the
+        # result cleanly and don't show it. Re-encoding the final concat sidesteps this by
+        # producing one single, consistent stream. Only paid when datamoshing is actually used.
+        on_log("[INFO] Datamoshing actif : ré-encodage de la concaténation finale (plus lent que le stream-copy habituel, évite les flashs noirs à la lecture).")
+        concat_cmd = [
+            ffmpeg_path, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file),
+            "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-an",
+            str(final_output),
+        ]
+    else:
+        concat_cmd = [ffmpeg_path, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file), "-c", "copy", str(final_output)]
+    ffmpeg_utils.run(concat_cmd, on_log, cancel_event)
 
     if not final_output.exists():
         raise ValueError("Échec de la concaténation finale.")

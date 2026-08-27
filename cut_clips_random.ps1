@@ -267,7 +267,17 @@ if ((Split-Path $finalOutput -Leaf) -ne $outputFileName) {
     Write-Host "[INFO] Le fichier existait deja, sortie renommee : $(Split-Path $finalOutput -Leaf)" -ForegroundColor Yellow
 }
 
-& $ffmpegPath -f concat -safe 0 -i $concatFile -c copy "$finalOutput"
+if ($moshCount -gt 0) {
+    # Mosh transition clips come from a different filter chain than the plain cuts, so their
+    # encoded SPS/PPS differ slightly even at matching codec/crf. A stream-copy concat (fine
+    # for uniform hard-cut clips) then flashes black at every segment boundary in real players
+    # like VLC, whose decoder resets on each parameter-set change - re-encoding the final
+    # concat into one consistent stream avoids it. Only paid when datamoshing is actually used.
+    Write-Host "[INFO] Datamoshing actif : re-encodage de la concatenation finale (evite les flashs noirs a la lecture)."
+    & $ffmpegPath -f concat -safe 0 -i $concatFile -c:v libx264 -preset medium -crf 20 -an "$finalOutput"
+} else {
+    & $ffmpegPath -f concat -safe 0 -i $concatFile -c copy "$finalOutput"
+}
 
 Write-Host ""
 
