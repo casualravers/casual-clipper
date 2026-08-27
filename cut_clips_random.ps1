@@ -217,9 +217,12 @@ if ($datamoshProbability -gt 0 -and $cuts.Count -gt 1) {
     for ($i = 0; $i -lt $cuts.Count - 1; $i++) {
         if ((Get-Random -Minimum 0.0 -Maximum 1.0) -lt $datamoshProbability) {
             $moshPath = Join-Path $moshFolder ("mosh_{0:D4}.mp4" -f $i)
-            $filterComplex = "[0:v]trim=start=0:duration=$datamoshWindow,setpts=PTS-STARTPTS,eq=contrast=1.2:brightness=0.1[a];" +
-                "[1:v]trim=start=0:duration=$datamoshWindow,setpts=PTS-STARTPTS[b];" +
-                "[a][b]blend=all_mode=lighten:all_opacity=0.5,noise=alls=0.15:allf=t,fps=$fps[out]"
+            # noise's alls= is a 0-100 strength (not 0-1) and 'difference128' is a harsh flashy
+            # blend mode (vs. a soft 'lighten' dissolve) - both needed for the corruption to
+            # actually read as datamoshing instead of a barely-visible crossfade.
+            $filterComplex = "[0:v]trim=start=0:duration=$datamoshWindow,setpts=PTS-STARTPTS,eq=contrast=1.6:brightness=0.15:saturation=1.8,rgbashift=rh=6:bh=-6,noise=alls=30:allf=t+u[a];" +
+                "[1:v]trim=start=0:duration=$datamoshWindow,setpts=PTS-STARTPTS,eq=contrast=1.6:brightness=0.15:saturation=1.8,rgbashift=rh=-6:bh=6,noise=alls=30:allf=t+u[b];" +
+                "[a][b]blend=all_mode=difference128:all_opacity=0.9,eq=contrast=1.4,noise=alls=20:allf=t,fps=$fps[out]"
 
             & $ffmpegPath -y -sseof "-$datamoshWindow" -i "$($cuts[$i])" -i "$($cuts[$i + 1])" `
                 -filter_complex $filterComplex -map "[out]" `

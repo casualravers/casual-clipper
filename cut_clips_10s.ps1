@@ -171,7 +171,10 @@ if ($datamosh -eq "o") {
     $datamoshOutput = Get-UniqueOutputPath (Join-Path $editsFolder "final_mix_10s_datamosh.mp4")
     
     # Filtre datamosh : corruption frame + blend
-    $datamoshFilter = "split=2[orig][dup];[dup]scale=$width`:$height`,eq=contrast=1.2:brightness=0.1,noise=alls=0.15[glitch];[orig][glitch]blend=all_mode=lighten:all_opacity=0.4,fps=$fps"
+    # noise's alls= is a 0-100 strength (not 0-1) and 'difference128' is a harsh flashy blend
+    # mode (vs. the previous soft 'lighten' dissolve) - needed for the corruption to actually
+    # read as datamoshing instead of a barely-visible crossfade.
+    $datamoshFilter = "split=2[orig][dup];[dup]scale=$width`:$height`,eq=contrast=1.6:brightness=0.15:saturation=1.8,rgbashift=rh=6:bh=-6,noise=alls=30:allf=t+u[glitch];[orig][glitch]blend=all_mode=difference128:all_opacity=0.85,eq=contrast=1.4,noise=alls=20:allf=t,fps=$fps"
     
     & $ffmpegPath -i "$finalOutput" `
         -vf "$datamoshFilter" `

@@ -61,16 +61,23 @@ def _build_datamosh_transition(
     cancel_event: threading.Event,
 ) -> bool:
     """Blend the tail of clip_a with the head of clip_b into a short corrupted transition
-    clip, reusing the same eq/noise/blend look as effects.DATAMOSH_FILTER (there it blends
-    a clip with itself; here it blends two different clips across the cut point, which is
-    the actual "datamoshing between clips" effect — a smear/bleed at the edit instead of a
-    hard cut). Both inputs are already scaled/padded identically by the cutting loop above,
-    so no extra scale filter is needed here."""
+    clip — the tail of A and the head of B are pushed through a heavy eq + RGB-channel-shift
+    + strong noise pass each, then combined with 'difference128' (a harsh, flashy blend mode
+    that reads as pixel-level corruption, unlike a soft 'lighten' crossfade which just looks
+    like a normal dissolve). Both inputs are already scaled/padded identically by the cutting
+    loop above, so no extra scale filter is needed here.
+    Note: noise's alls= is a 0-100 strength, not a 0-1 fraction — an earlier version passed
+    0.15 here, which is next to imperceptible; the actual corrupted/staticky look needs
+    something in the 25-40 range."""
     filter_complex = (
         f"[0:v]trim=start=0:duration={window},setpts=PTS-STARTPTS,"
-        f"eq=contrast=1.2:brightness=0.1[a];"
-        f"[1:v]trim=start=0:duration={window},setpts=PTS-STARTPTS[b];"
-        f"[a][b]blend=all_mode=lighten:all_opacity=0.5,noise=alls=0.15:allf=t,fps={fps}[out]"
+        f"eq=contrast=1.6:brightness=0.15:saturation=1.8,"
+        f"rgbashift=rh=6:bh=-6,noise=alls=30:allf=t+u[a];"
+        f"[1:v]trim=start=0:duration={window},setpts=PTS-STARTPTS,"
+        f"eq=contrast=1.6:brightness=0.15:saturation=1.8,"
+        f"rgbashift=rh=-6:bh=6,noise=alls=30:allf=t+u[b];"
+        f"[a][b]blend=all_mode=difference128:all_opacity=0.9,"
+        f"eq=contrast=1.4,noise=alls=20:allf=t,fps={fps}[out]"
     )
     cmd = [
         ffmpeg_path, "-y",
