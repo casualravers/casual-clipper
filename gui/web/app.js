@@ -84,6 +84,8 @@
       state.config.generate.outputFileName = e.target.value;
       scheduleSave();
     });
+    $("#datamoshProbability").addEventListener("input", bindNumber(["generate", "datamoshProbability"]));
+    $("#datamoshWindow").addEventListener("input", bindNumber(["generate", "datamoshWindow"]));
 
     $("#effectSelect").addEventListener("change", (e) => {
       state.config.glitch.effect = e.target.value;
@@ -251,6 +253,8 @@
     $("#genFps").value = c.generate.fps;
     $("#editsFolder").value = c.generate.editsFolder;
     $("#outputFileName").value = c.generate.outputFileName;
+    $("#datamoshProbability").value = c.generate.datamoshProbability;
+    $("#datamoshWindow").value = c.generate.datamoshWindow;
     renderFolders();
     renderClipTypes();
 
@@ -581,7 +585,7 @@
 
   async function onDeleteTempClips() {
     if (!state.lastGenerateResult) return;
-    await api().delete_temp_clips(state.lastGenerateResult.clipsFolder, state.lastGenerateResult.concatFile);
+    await api().delete_temp_clips(state.lastGenerateResult.clipsFolder, state.lastGenerateResult.concatFile, state.lastGenerateResult.moshFolder || "");
     appendLog("[OK] Clips temporaires supprimés.");
     $("#deleteTempBtn").parentElement.hidden = true;
   }

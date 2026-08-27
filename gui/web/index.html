@@ -128,6 +128,20 @@
         </button>
       </div>
     </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Datamoshing <span class="tooltip info-icon" data-tooltip="Entre certains cuts, remplace la coupe franche par une courte transition corrompue (mélange bavé de la fin d'un clip et du début du suivant, avec bruit) — l'effet VHS/glitch culte de corruption vidéo. 0% = uniquement des coupes franches.">i</span></h2></div>
+      <div class="grid-2">
+        <div class="field">
+          <label for="datamoshProbability">Probabilité par coupe (0-1)</label>
+          <input type="number" id="datamoshProbability" class="number-input" min="0" max="1" step="0.05" />
+        </div>
+        <div class="field">
+          <label for="datamoshWindow">Durée de transition (s)</label>
+          <input type="number" id="datamoshWindow" class="number-input" min="0.1" step="0.1" />
+        </div>
+      </div>
+    </div>
   </section>
 
   <!-- ============ TAB: GLITCH ============ -->
