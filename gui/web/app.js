@@ -433,6 +433,13 @@
       clearTimeout(state.saveTimer);
       state.saveTimer = null;
     }
+    // Capture which row/field is focused *before* the autosave round-trip: the re-render
+    // below rebuilds every row from scratch (cloned from the <template>), which would
+    // otherwise silently steal focus mid-edit. If the user clears a field (e.g. a "beats"
+    // value) and pauses for the 500ms debounce before typing the replacement, losing focus
+    // here means their next keystrokes land nowhere — the field looks stuck at whatever
+    // got normalized (0), which is exactly the "can't type a value back in" symptom.
+    const focusInfo = captureRowFocus();
     const normalized = await api().save_config(state.config);
     state.config = normalized;
     // Reflect any server-side normalization (e.g. weight rebalancing) back into the UI.
@@ -441,6 +448,43 @@
     renderPlaylists();
     renderFolders();
     renderClipTypes();
+    restoreRowFocus(focusInfo);
+  }
+
+  function captureRowFocus() {
+    const el = document.activeElement;
+    if (!el || !el.matches("input, select, textarea")) return null;
+    const row = el.closest("[data-row]");
+    const container = row ? row.parentElement : null;
+    if (!row || !container || !container.id) return null;
+    // input[type=number] throws on selectionStart/End access in Chromium (unsupported for
+    // that input type) — number is exactly what beats/weight/probability fields use, so this
+    // must be guarded rather than feature-detected.
+    let selStart = null, selEnd = null;
+    try {
+      selStart = el.selectionStart;
+      selEnd = el.selectionEnd;
+    } catch { /* number/date/etc. input — no text selection to preserve */ }
+    return {
+      containerId: container.id,
+      index: Array.from(container.children).indexOf(row),
+      field: el.dataset.field || null,
+      selStart,
+      selEnd,
+    };
+  }
+
+  function restoreRowFocus(info) {
+    if (!info) return;
+    const container = document.getElementById(info.containerId);
+    const row = container && container.children[info.index];
+    if (!row) return;
+    const el = info.field ? row.querySelector(`[data-field="${info.field}"]`) : row.querySelector("input, select");
+    if (!el) return;
+    el.focus();
+    if (info.selStart !== null && el.setSelectionRange) {
+      try { el.setSelectionRange(info.selStart, info.selEnd); } catch { /* not a text-selectable input type */ }
+    }
   }
 
   // ---------------- settings modal ----------------
