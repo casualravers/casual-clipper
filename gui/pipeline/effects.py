@@ -7,11 +7,15 @@ from typing import Callable
 
 from . import ffmpeg_utils
 
-GLITCH_FILTER = "scale={w}:{h},fps={fps},hue=s=1.2,noise=alls=0.05:allf=t"
+# noise's alls= is a 0-100 strength, not a 0-1 fraction — 0.05/0.15 (the original values here)
+# are next to imperceptible; 12-30 is where the grain/corruption actually reads on screen.
+GLITCH_FILTER = "scale={w}:{h},fps={fps},hue=s=1.2,noise=alls=12:allf=t"
 DATAMOSH_FILTER = (
     "split=2[orig][dup];"
-    "[dup]scale={w}:{h},eq=contrast=1.2:brightness=0.1,noise=alls=0.15[glitch];"
-    "[orig][glitch]blend=all_mode=lighten:all_opacity=0.4,fps={fps}"
+    "[dup]scale={w}:{h},eq=contrast=1.6:brightness=0.15:saturation=1.8,"
+    "rgbashift=rh=6:bh=-6,noise=alls=30:allf=t+u[glitch];"
+    "[orig][glitch]blend=all_mode=difference128:all_opacity=0.85,eq=contrast=1.4,"
+    "noise=alls=20:allf=t,fps={fps}"
 )
 
 

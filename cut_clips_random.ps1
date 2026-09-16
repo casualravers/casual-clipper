@@ -7,6 +7,11 @@ $finalVideoDuration = 80   # 80 minutes
 $editsFolder = Join-Path $MixHome "edits\Projet_VHS_Glitch_ALL_poids"
 $outputFileName = "final_mix.mp4"
 
+# DATAMOSHING - probabilite (0.0 a 1.0) qu'une coupe entre deux clips devienne une
+# transition corrompue (bavure/blend + bruit) au lieu d'une coupe franche. 0 = desactive.
+$datamoshProbability = 0.0
+$datamoshWindow = 0.5   # duree en secondes de la transition corrompue
+
 # DOSSIERS SOURCES AVEC POIDS (0.0 a 1.0) - par defaut sous $MixHome\downloads\...
 # (voir resolve_tools.ps1), a adapter aux dossiers reellement telecharges.
 # Plus le poids est haut, plus on prend de videos de ce dossier
@@ -202,9 +207,47 @@ if ($cuts.Count -eq 0) {
     exit
 }
 
+# ======== DATAMOSHING ENTRE LES CLIPS ========
+$concatList = @($cuts[0])
+if ($datamoshProbability -gt 0 -and $cuts.Count -gt 1) {
+    $moshFolder = Join-Path $editsFolder "clips_datamosh"
+    if (-not (Test-Path $moshFolder)) { New-Item -ItemType Directory -Path $moshFolder | Out-Null }
+
+    $moshCount = 0
+    for ($i = 0; $i -lt $cuts.Count - 1; $i++) {
+        if ((Get-Random -Minimum 0.0 -Maximum 1.0) -lt $datamoshProbability) {
+            $moshPath = Join-Path $moshFolder ("mosh_{0:D4}.mp4" -f $i)
+            # noise's alls= is a 0-100 strength (not 0-1) and 'difference128' is a harsh flashy
+            # blend mode (vs. a soft 'lighten' dissolve) - both needed for the corruption to
+            # actually read as datamoshing instead of a barely-visible crossfade.
+            $filterComplex = "[0:v]trim=start=0:duration=$datamoshWindow,setpts=PTS-STARTPTS,eq=contrast=1.6:brightness=0.15:saturation=1.8,rgbashift=rh=6:bh=-6,noise=alls=30:allf=t+u[a];" +
+                "[1:v]trim=start=0:duration=$datamoshWindow,setpts=PTS-STARTPTS,eq=contrast=1.6:brightness=0.15:saturation=1.8,rgbashift=rh=-6:bh=6,noise=alls=30:allf=t+u[b];" +
+                "[a][b]blend=all_mode=difference128:all_opacity=0.9,eq=contrast=1.4,noise=alls=20:allf=t,fps=$fps[out]"
+
+            & $ffmpegPath -y -sseof "-$datamoshWindow" -i "$($cuts[$i])" -i "$($cuts[$i + 1])" `
+                -filter_complex $filterComplex -map "[out]" `
+                -c:v libx264 -preset ultrafast -crf 23 -an `
+                "$moshPath" 2>&1 | Out-Null
+
+            if (Test-Path $moshPath) {
+                $concatList += $moshPath
+                $moshCount++
+            } else {
+                Write-Host "  [ERREUR] Transition datamosh $i non creee"
+            }
+        }
+        $concatList += $cuts[$i + 1]
+    }
+    if ($moshCount -gt 0) {
+        Write-Host "[DATAMOSH] $moshCount transition(s) corrompue(s) inseree(s) entre les clips"
+    }
+} else {
+    $concatList = $cuts
+}
+
 Write-Host ""
 Write-Host "========== CONCATENATION =========="
-Write-Host "Nombre total de clips : $($cuts.Count)"
+Write-Host "Nombre total de segments : $($concatList.Count)"
 Write-Host "Duree accumulee : $([math]::Round($secondsAccumulated / 60, 1)) minutes"
 Write-Host ""
 
@@ -213,7 +256,7 @@ $concatFile = Join-Path $editsFolder "concat_list.txt"
 $utf8NoBOM = New-Object System.Text.UTF8Encoding $false
 $stream = [System.IO.StreamWriter]::new($concatFile, $false, $utf8NoBOM)
 
-foreach ($clip in $cuts) {
+foreach ($clip in $concatList) {
     $stream.WriteLine("file '$clip'")
 }
 $stream.Close()
@@ -224,7 +267,17 @@ if ((Split-Path $finalOutput -Leaf) -ne $outputFileName) {
     Write-Host "[INFO] Le fichier existait deja, sortie renommee : $(Split-Path $finalOutput -Leaf)" -ForegroundColor Yellow
 }
 
-& $ffmpegPath -f concat -safe 0 -i $concatFile -c copy "$finalOutput"
+if ($moshCount -gt 0) {
+    # Mosh transition clips come from a different filter chain than the plain cuts, so their
+    # encoded SPS/PPS differ slightly even at matching codec/crf. A stream-copy concat (fine
+    # for uniform hard-cut clips) then flashes black at every segment boundary in real players
+    # like VLC, whose decoder resets on each parameter-set change - re-encoding the final
+    # concat into one consistent stream avoids it. Only paid when datamoshing is actually used.
+    Write-Host "[INFO] Datamoshing actif : re-encodage de la concatenation finale (evite les flashs noirs a la lecture)."
+    & $ffmpegPath -f concat -safe 0 -i $concatFile -c:v libx264 -preset medium -crf 20 -an "$finalOutput"
+} else {
+    & $ffmpegPath -f concat -safe 0 -i $concatFile -c copy "$finalOutput"
+}
 
 Write-Host ""
 
@@ -255,6 +308,7 @@ $cleanup = Read-Host "Supprimer les fichiers temporaires ? (o/n)"
 if ($cleanup -eq "o") {
     Write-Host "[EN COURS] Suppression des clips temporaires..."
     Remove-Item $clipsFolder -Recurse -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $editsFolder "clips_datamosh") -Recurse -ErrorAction SilentlyContinue
     Remove-Item $concatFile -ErrorAction SilentlyContinue
     Write-Host "[OK] Fichiers temporaires supprimes"
 } else {

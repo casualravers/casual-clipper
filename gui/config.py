@@ -58,6 +58,10 @@ DEFAULT_CONFIG = {
             {"name": "32beats", "beats": 32, "probability": 0.15},
         ],
         "deleteTempClipsAfterConcat": False,
+        # Datamoshing: probability (0.0-1.0) that a given cut between two clips gets a
+        # blended/corrupted transition instead of a hard cut, and the transition's length.
+        "datamoshProbability": 0.0,
+        "datamoshWindow": 0.5,
     },
     "glitch": {
         "lastInputVideo": "",

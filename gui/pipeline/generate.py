@@ -51,6 +51,48 @@ def sanitize_output_filename(raw_name: str | None) -> str:
     return name
 
 
+def _build_datamosh_transition(
+    ffmpeg_path: str,
+    clip_a: str,
+    clip_b: str,
+    window: float,
+    fps: int,
+    out_path: Path,
+    cancel_event: threading.Event,
+) -> bool:
+    """Blend the tail of clip_a with the head of clip_b into a short corrupted transition
+    clip — the tail of A and the head of B are pushed through a heavy eq + RGB-channel-shift
+    + strong noise pass each, then combined with 'difference128' (a harsh, flashy blend mode
+    that reads as pixel-level corruption, unlike a soft 'lighten' crossfade which just looks
+    like a normal dissolve). Both inputs are already scaled/padded identically by the cutting
+    loop above, so no extra scale filter is needed here.
+    Note: noise's alls= is a 0-100 strength, not a 0-1 fraction — an earlier version passed
+    0.15 here, which is next to imperceptible; the actual corrupted/staticky look needs
+    something in the 25-40 range."""
+    filter_complex = (
+        f"[0:v]trim=start=0:duration={window},setpts=PTS-STARTPTS,"
+        f"eq=contrast=1.6:brightness=0.15:saturation=1.8,"
+        f"rgbashift=rh=6:bh=-6,noise=alls=30:allf=t+u[a];"
+        f"[1:v]trim=start=0:duration={window},setpts=PTS-STARTPTS,"
+        f"eq=contrast=1.6:brightness=0.15:saturation=1.8,"
+        f"rgbashift=rh=-6:bh=6,noise=alls=30:allf=t+u[b];"
+        f"[a][b]blend=all_mode=difference128:all_opacity=0.9,"
+        f"eq=contrast=1.4,noise=alls=20:allf=t,fps={fps}[out]"
+    )
+    cmd = [
+        ffmpeg_path, "-y",
+        "-sseof", f"-{window}", "-i", clip_a,
+        "-i", clip_b,
+        "-filter_complex", filter_complex,
+        "-map", "[out]",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+        "-an",
+        str(out_path),
+    ]
+    ffmpeg_utils.run(cmd, lambda _line: None, cancel_event)
+    return out_path.exists()
+
+
 def run_generate_job(
     config: dict,
     tool_paths: dict,
@@ -174,23 +216,64 @@ def run_generate_job(
     if not cuts:
         raise ValueError("Aucun clip créé.")
 
+    datamosh_probability = float(gen.get("datamoshProbability", 0.0))
+    datamosh_window = float(gen.get("datamoshWindow", 0.5))
+    concat_list = list(cuts)
+    mosh_count = 0
+
+    if datamosh_probability > 0 and len(cuts) > 1:
+        mosh_folder = edits_folder / "clips_datamosh"
+        ffmpeg_utils.ensure_dir(mosh_folder)
+        concat_list = [cuts[0]]
+        for i in range(len(cuts) - 1):
+            if cancel_event.is_set():
+                raise ffmpeg_utils.CancelledError()
+            if rng.random() < datamosh_probability:
+                mosh_path = mosh_folder / f"mosh_{i:04d}.mp4"
+                try:
+                    ok = _build_datamosh_transition(
+                        ffmpeg_path, cuts[i], cuts[i + 1], datamosh_window, fps, mosh_path, cancel_event
+                    )
+                except ffmpeg_utils.CancelledError:
+                    raise
+                if ok:
+                    concat_list.append(str(mosh_path))
+                    mosh_count += 1
+                else:
+                    on_log(f"  [ERREUR] Transition datamosh {i} non créée")
+            concat_list.append(cuts[i + 1])
+        if mosh_count:
+            on_log(f"[DATAMOSH] {mosh_count} transition(s) corrompue(s) insérée(s) entre les clips")
+
     on_log("")
-    on_log(f"[CONCATENATION] {len(cuts)} clips, {accumulated / 60:.1f} minutes")
+    on_log(f"[CONCATENATION] {len(concat_list)} segments, {accumulated / 60:.1f} minutes")
 
     concat_file = edits_folder / "concat_list.txt"
     with open(concat_file, "w", encoding="utf-8", newline="\n") as f:
-        for clip in cuts:
+        for clip in concat_list:
             f.write(f"file '{clip}'\n")
 
     output_filename = sanitize_output_filename(gen.get("outputFileName"))
     final_output = ffmpeg_utils.unique_path(edits_folder / output_filename)
     if final_output.name != output_filename:
         on_log(f"[INFO] Le fichier existait déjà, sortie renommée : {final_output.name}")
-    ffmpeg_utils.run(
-        [ffmpeg_path, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file), "-c", "copy", str(final_output)],
-        on_log,
-        cancel_event,
-    )
+    if mosh_count:
+        # The datamosh transition clips are produced by a different ffmpeg filter chain than
+        # the plain cuts, so even at matching codec/crf their encoded SPS/PPS parameter sets
+        # differ slightly. A stream-copy concat (fine for uniform hard-cut clips) then plays
+        # back with a black flash at every segment boundary in real players like VLC — their
+        # decoder resets on each parameter-set change, even though ffmpeg/ffprobe decode the
+        # result cleanly and don't show it. Re-encoding the final concat sidesteps this by
+        # producing one single, consistent stream. Only paid when datamoshing is actually used.
+        on_log("[INFO] Datamoshing actif : ré-encodage de la concaténation finale (plus lent que le stream-copy habituel, évite les flashs noirs à la lecture).")
+        concat_cmd = [
+            ffmpeg_path, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file),
+            "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-an",
+            str(final_output),
+        ]
+    else:
+        concat_cmd = [ffmpeg_path, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file), "-c", "copy", str(final_output)]
+    ffmpeg_utils.run(concat_cmd, on_log, cancel_event)
 
     if not final_output.exists():
         raise ValueError("Échec de la concaténation finale.")
@@ -204,16 +287,21 @@ def run_generate_job(
         "clipCount": len(cuts),
         "durationSec": final_duration,
         "clipsFolder": str(clips_folder),
+        "moshFolder": str(edits_folder / "clips_datamosh"),
         "concatFile": str(concat_file),
     }
 
 
-def delete_temp_clips(clips_folder: str, concat_file: str) -> None:
+def delete_temp_clips(clips_folder: str, concat_file: str, mosh_folder: str = "") -> None:
     import shutil
 
     folder = Path(clips_folder)
     if folder.exists():
         shutil.rmtree(folder, ignore_errors=True)
+    if mosh_folder:
+        mosh_path = Path(mosh_folder)
+        if mosh_path.exists():
+            shutil.rmtree(mosh_path, ignore_errors=True)
     concat_path = Path(concat_file)
     if concat_path.exists():
         concat_path.unlink(missing_ok=True)

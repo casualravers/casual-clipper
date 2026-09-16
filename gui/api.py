@@ -91,8 +91,8 @@ class Api:
     def get_job_status(self, job_id: str) -> dict:
         return self.jobs.get_status(job_id)
 
-    def delete_temp_clips(self, clips_folder: str, concat_file: str) -> bool:
-        generate.delete_temp_clips(clips_folder, concat_file)
+    def delete_temp_clips(self, clips_folder: str, concat_file: str, mosh_folder: str = "") -> bool:
+        generate.delete_temp_clips(clips_folder, concat_file, mosh_folder)
         return True
 
     # ---- misc ----

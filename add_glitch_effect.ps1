@@ -16,7 +16,8 @@ $outputVideo = Get-UniqueOutputPath (Join-Path $editsFolder "final_mix_glitch.mp
 # - Random noise
 # - Subtle distortion
 
-$glitchFilter = "scale=1920:1080,fps=30,hue=s=1.2,noise=alls=0.05:allf=t"
+# noise's alls= is a 0-100 strength, not a 0-1 fraction - 0.05 was next to imperceptible.
+$glitchFilter = "scale=1920:1080,fps=30,hue=s=1.2,noise=alls=12:allf=t"
 
 Write-Host "Application de l'effet glitch..."
 
